@@ -33,7 +33,7 @@ import math
 import os
 import re
 import sys
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -51,7 +51,7 @@ HIST_FLOOR = (2025, 6)   # PSEG publishes historical rates back to June 2025
 # is not independently confirmed it is flagged (see month flags) and the       #
 # scraper is expected to correct it. Seasons: Summer = Jun-Sep, Winter = rest. #
 # --------------------------------------------------------------------------- #
-EPOCH_PRE = {            # in effect through 2025-12-31
+EPOCH_PRE: dict[str, Any] = {            # in effect through 2025-12-31
     "basic_day": 0.5400, "der_rate": 0.005554, "mfc_rate": 0.001886,
     "cbc_rate": 0.0330, "dsa_rate": -0.0006, "rda_rate": -0.0003,
     "nysa_pct": 0.0027, "pilots_pct": 0.0215, "suffolk_pct": 0.0231, "salestax_pct": 0.025,
@@ -66,7 +66,7 @@ EPOCH_PRE = {            # in effect through 2025-12-31
                 "mult_peak_S": 1.7419, "mult_peak_W": 1.9688},
     },
 }
-EPOCH_2026 = {           # in effect from 2026-01-01
+EPOCH_2026: dict[str, Any] = {           # in effect from 2026-01-01
     "basic_day": 0.5600, "der_rate": 0.006014, "mfc_rate": 0.001763,
     "cbc_rate": 0.0372, "dsa_rate": -0.0006, "rda_rate": -0.0003,
     "nysa_pct": 0.0027, "pilots_pct": 0.0215, "suffolk_pct": 0.0231, "salestax_pct": 0.025,
