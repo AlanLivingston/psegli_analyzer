@@ -33,10 +33,12 @@ import math
 import os
 import re
 import sys
+from typing import cast
 
+import numpy as np
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
 CACHE_FILE = "pseg_rates_cache.json"
@@ -235,13 +237,14 @@ def load_consumption(path):
         df["ts"] = pd.to_datetime(df["Start"], format="%m/%d/%Y %I:%M:%S %p")
     except (ValueError, TypeError):
         df["ts"] = pd.to_datetime(df["Start"])
-    df["kWh"] = pd.to_numeric(df["kWh"], errors="coerce").fillna(0.0)
+    df["kWh"] = cast("pd.Series", pd.to_numeric(df["kWh"], errors="coerce")).fillna(0.0)
     df["is_gen"] = df["Meter"].astype(str).str.contains(r"#\s*\d+\s*g", case=True, regex=True)
-    imp = df[~df["is_gen"]].groupby("ts")["kWh"].sum().rename("imp")
-    gen = df[df["is_gen"]].copy()
+    con = cast("pd.DataFrame", df[~df["is_gen"]])
+    gen = cast("pd.DataFrame", df[df["is_gen"]]).copy()
     gen["kWh"] = gen["kWh"].abs()
-    exp = gen.groupby("ts")["kWh"].sum().rename("exp")
-    m = pd.concat([imp, exp], axis=1).fillna(0.0).sort_index()
+    imp = con.groupby("ts")["kWh"].sum()
+    exp = gen.groupby("ts")["kWh"].sum()
+    m = pd.DataFrame({"imp": imp, "exp": exp}).fillna(0.0).sort_index()
     if m.empty:
         sys.exit("No usable rows parsed from the CSV.")
     m["net"] = m["imp"] - m["exp"]
@@ -321,26 +324,28 @@ def effective_rates(a, b, sched, warnings):
 
 
 def cycle_primitives(m, cycles, holidays, sched, warnings):
-    idx = m.index
-    hour, dow = idx.hour, idx.dayofweek
-    date = pd.Series(idx.date, index=idx)
-    is_hol = date.isin(holidays).values
+    idx = cast("pd.DatetimeIndex", m.index)
+    dtacc = idx.to_series().dt
+    hour = dtacc.hour.to_numpy()
+    dow = dtacc.dayofweek.to_numpy()
+    dates = dtacc.date.to_numpy()
+    is_hol = np.array([d in holidays for d in dates])
     is_peak = (dow < 5) & (~is_hol) & (hour >= 15) & (hour < 19)
     is_so = (hour >= 22) | (hour < 6)
     m = m.copy(); m["peak"] = is_peak; m["so"] = is_so
     rows = []
     for (a, b) in cycles:
-        sel = (date.values >= a) & (date.values <= b)
-        g = m[sel]
+        sel = (dates >= a) & (dates <= b)
+        g = cast("pd.DataFrame", m[sel])
         if g.empty:
             continue
-        net = float(g["net"].sum())
-        peak = float(g.loc[g["peak"], "net"].sum())
-        so = float(g.loc[g["so"], "net"].sum())
+        net = float(g["net"].to_numpy().sum())
+        peak = float(g.loc[g["peak"], "net"].to_numpy().sum())
+        so = float(g.loc[g["so"], "net"].to_numpy().sum())
         eff = effective_rates(a, b, sched, warnings)
         rows.append(dict(start=a, end=b, days=(b - a).days + 1, net=net, peak=peak, so=so,
                          off195=net - peak - so, off194=net - peak,
-                         demand=math.ceil(float(g["imp"].max()) * 4), eff=eff))
+                         demand=math.ceil(float(g["imp"].to_numpy().max()) * 4), eff=eff))
     return rows
 
 
@@ -627,7 +632,9 @@ def main():
 
     print("Loading consumption data...")
     m = load_consumption(args.cons_file)
-    start, end = m.index.min().date(), m.index.max().date()
+    didx = cast("pd.DatetimeIndex", m.index)
+    start = cast("pd.Timestamp", didx.min()).date()
+    end = cast("pd.Timestamp", didx.max()).date()
     print(f"  {len(m):,} intervals, {start} to {end}")
 
     print("Loading & refreshing rate schedule...")

@@ -1,5 +1,7 @@
-# Any produced Excel files
+# Any produced Excel, any downloaded consumption, and any billing files.
 *.xlsx
+*.csv
+bills/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
