@@ -1,8 +1,9 @@
 # Any produced Excel, any downloaded consumption, and any billing files.
 *.xlsx
-*.csv
 bills/
 
+# vscODE STUFF
+.vscode/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
