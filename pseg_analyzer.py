@@ -728,7 +728,7 @@ def build_dashboard(wb, prims, eref, meta):
     ws.column_dimensions["A"].width = 32
     for c in cyc_cols + [tot_col]:
         ws.column_dimensions[L(c)].width = 13
-    ws.freeze_panes = "B5"
+    ws.freeze_panes = "B6"   # freeze header through the service-dates row (row 5)
 
 
 # --------------------------------------------------------------------------- #
