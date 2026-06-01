@@ -923,8 +923,8 @@ def write_banking_tab(wb: "Workbook", sim: "list[dict[str, Any]]",
     Columns adapt to the rate's bank count (two for 194, three for 195). Per cycle it
     shows net by period, billable-after-banking by period, the transfers made, and the
     ending bank balances, then the all-in charge. Below the table it adds an optimality
-    check (greedy vs frictionless value-pool bound) and a usage-profile/forfeiture
-    block. `leftover`, `optimum`, and `profile` are precomputed by the caller."""
+    check (greedy vs the value-neutral bound) and a usage-profile/forfeiture block.
+    `leftover`, `optimum`, and `profile` are precomputed by the caller."""
     periods = TOD_PERIODS[rate]
     up = PERIOD_LABEL
     ratio = ":".join(str(int(w)) for w in sorted(TOD_WEIGHTS[rate].values()))   # e.g. 1:2 or 1:2:4
@@ -979,7 +979,7 @@ def write_banking_tab(wb: "Workbook", sim: "list[dict[str, Any]]",
     oc = ws.cell(r, 1, "OPTIMALITY CHECK"); oc.font = Font(FONT, bold=True, color="0F6E56", size=10); r += 1
     ws.cell(r, 1, "Greedy strategy (this tab)").font = Font(FONT, size=9)
     gv = ws.cell(r, len(hdr), total); gv.number_format = MONEY; gv.font = Font(FONT, size=9); r += 1
-    ws.cell(r, 1, "Frictionless value-pool optimum").font = Font(FONT, size=9)
+    ws.cell(r, 1, "Value-neutral optimum (rebalance buckets only)").font = Font(FONT, size=9)
     ov = ws.cell(r, len(hdr), optimum); ov.number_format = MONEY; ov.font = Font(FONT, size=9); r += 1
     ws.cell(r, 1, "Gap (cost of transfer frictions)").font = Font(FONT, bold=True, size=9)
     gp = ws.cell(r, len(hdr), total - optimum); gp.number_format = MONEY; gp.font = Font(FONT, bold=True, size=9)

@@ -187,23 +187,87 @@ the end of the window simply carries into the next period.
 
 The `Banking194`/`Banking195` tab shows, per cycle, the net by period, bank
 balances, the credit transfers made, billable kWh after banking, and the all-in
-charge. It also includes two diagnostics. An **optimality check** compares the
-greedy total against a frictionless "value-pool" optimum (all credits treated as
-one fungible pool at the period weights); the gap is the total cost of real
-transfer frictions and is typically under a dollar a year — confirming there is
-essentially nothing to gain from a cleverer strategy, because the exchange ratios
-are value-neutral. A **usage-profile** block reports each period's annual net
-(consumer vs producer) and flags forfeiture exposure: a household that is a net
-*producer* in value terms banks more than it consumes, so some credits never find
-a deficit to offset and would accumulate toward the 20-year forfeiture; a net
-consumer's banks drain through ordinary use and nothing is exposed. For each TOD
-rate the console prints the banked total, the optimality gap, and the profile,
-and names the cheaper of the two.
+charge. It also includes an **optimality check** with two reference points:
 
-The simulation is most meaningful over a **full year** of read dates, because
-the carry-forward is the whole point: a high-solar summer builds banks that get
-transferred to cut later bills. With only winter read dates the banks start empty
-in November, which understates the benefit.
+- **Value-neutral optimum** — the best bill if credits were a single fungible
+  pool rebalanced across buckets at the 1:2:4 weights. The gap from the greedy
+  total is the cost of real transfer frictions (whole-kWh rounding, the two-per-
+  cycle cap) and is typically under a dollar a year, because the exchange ratios
+  are value-neutral.
+
+There is a separate, real (if small) gain available from *choosing the transfer
+destination* by season rather than rebalancing — see "Transfer-ratio arbitrage"
+below — but it is a deliberate manual strategy, not something the greedy
+simulation scores.
+
+A **usage-profile** block reports each period's annual net (consumer vs producer)
+and flags forfeiture exposure: a household that is a net *producer* in value
+terms banks more than it consumes, so some credits never find a deficit to offset
+and would accumulate toward the 20-year forfeiture; a net consumer's banks drain
+through ordinary use and nothing is exposed. For each TOD rate the console prints
+the banked total, the optimality gap, and the profile, and names the cheaper of
+the two.
+
+### Transfer-ratio arbitrage (hoard-and-convert)
+
+The greedy simulation lets each period's banked credit offset its *own* period's
+usage (off-peak credit covers off-peak heating, etc.). There is a small, real gain
+available from instead steering off-peak credit into **super-off** during the
+winter PSC season. It is pure ratio arbitrage, not calendar timing.
+
+**Why it works.** Transfers are a fixed kWh swap — 1 off-peak credit always buys 2
+super-off kWh (and 1 peak buys 4). But the *true* dollar ratio between periods
+moves with the season:
+
+| credit → super-off | true price ratio | form pays | verdict |
+|---|---|---|---|
+| off-peak (summer) | ≈ 2.20 | 2 | form **underpays** — don't convert |
+| off-peak (winter) | ≈ 1.81 | 2 | form **overpays** — convert |
+| peak (summer) | ≈ 4.29 | 4 | form underpays — keep on peak |
+| peak (winter) | ≈ 4.04 | 4 | form underpays — keep on peak |
+
+In the winter PSC season the off-peak rate falls (~\$0.22) while super-off stays
+near \$0.12, so the true off/SO ratio drops to ~1.81 — below the flat 2 the form
+pays. Converting one off-peak credit then yields 2 × \$0.122 ≈ \$0.245 of super-off
+offset versus the ~\$0.22 it would save on off-peak heating: a ~\$0.025/kWh edge.
+Across the banked off-peak surplus this is worth roughly **\$50–55/yr** on the
+reference profile (~1.5% of the bill). The peak rows never cross 4, so peak credit
+is always worth more left on peak — **never convert peak to super-off**.
+
+**The routine.**
+
+1. **Hoard through the summer PSC season (≈ Jun–Sep).** File no off→super-off
+   transfers; let net export bank in the off-peak (and peak) buckets. The off/SO
+   ratio is above 2 then, so converting would lose value, and summer super-off is
+   the cheapest of the year.
+2. **Convert once the winter PSC season starts (≈ October).** File an Excess
+   Generation Exchange transfer to move the banked off-peak surplus into super-off,
+   where the fixed 1:2 ratio now overpays. The credit you transfer is the *summer
+   surplus that is actually sitting in the bank* — no need to make anything survive
+   to late winter.
+3. **Resume hoarding when summer returns.** Stop converting once the off/SO ratio
+   climbs back above 2.
+
+**Two honest caveats.**
+
+- *Timing within the conversion window doesn't add value.* Because the reachable
+  super-off rate is essentially flat (~\$0.12 from summer through December — the
+  off-peak bank is emptied by heating load before the high-rate February cycles),
+  converting in summer versus the first winter month lands on the same rate. The
+  gain comes entirely from the **destination choice** (super-off instead of
+  off-peak heating) during the winter ratio window, not from *when* you file. There
+  is no extra prize from trying to reach the high-PSC late-winter super-off cycles —
+  no banked credit survives to them.
+- *It is profile- and effort-dependent.* The edge requires a summer off-peak
+  surplus to convert; a net off-peak consumer has nothing to steer. And it means
+  filing transfers every winter for a few tens of dollars, so the default banking
+  is a perfectly reasonable do-nothing baseline. There is no downside to the
+  hoarding itself — residential credits roll forward 20 years.
+
+The simulation is most meaningful over a **full year** of read dates, because the
+carry-forward is the whole point: a high-solar summer builds the banks the winter
+conversion works on. With only winter read dates the banks start empty in November
+and the picture is understated.
 
 ---
 
