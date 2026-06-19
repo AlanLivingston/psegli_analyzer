@@ -22,7 +22,7 @@ known rates and a warning is printed.
 Usage:
     python pseg_analyzer.py --cons_file Usage.csv
     python pseg_analyzer.py --cons_file Usage.csv --read-dates 2025-11-15 2025-12-15 2026-01-16 ...
-    python pseg_analyzer.py --cons_file Usage.csv --demand 16 --out report.xlsx [--refresh]
+    python pseg_analyzer.py --cons_file Usage.csv --solar_dc_kw 16 --out report.xlsx [--refresh]
 """
 
 import argparse
@@ -375,8 +375,9 @@ def cycle_primitives(m, cycles, holidays, sched, warnings):
     """Reduce the interval data to one summary record per billing cycle.
 
     For each cycle [a, b] it sums net kWh overall and within the on-peak and
-    super-off-peak windows (deriving the two off-peak figures by subtraction),
-    estimates peak demand, and attaches the day-weighted effective rates. The TOD
+    super-off-peak windows (deriving the two off-peak figures by subtraction)
+    and attaches the day-weighted effective rates. The CBC basis (solar DC
+    nameplate) is filled in from --solar_dc_kw after parsing. The TOD
     window rules: on-peak = weekday 3-7 p.m. excluding federal holidays;
     super-off-peak = 10 p.m.-6 a.m.; off-peak = everything else."""
     idx = cast("pd.DatetimeIndex", m.index)
@@ -403,8 +404,8 @@ def cycle_primitives(m, cycles, holidays, sched, warnings):
         rows.append(dict(start=a, end=b, end_label=b, days=(b - a).days + 1, net=net, peak=peak, so=so,
                          # 195 off-peak excludes both peak and super-off; 194 off-peak is just non-peak.
                          off195=net - peak - so, off194=net - peak,
-                         # Demand ~ max 15-min import x4 (kW), rounded up; override with --demand.
-                         demand=math.ceil(float(g["imp"].to_numpy().max()) * 4), eff=eff))
+                         # Solar array DC nameplate (kW) drives the CBC charge; set via --solar_dc_kw.
+                         solar_dc_kw=0.0, eff=eff))
     return rows
 
 
@@ -557,7 +558,7 @@ def build_dashboard(wb, prims, eref, meta):
 
     def usage(label, key, agg="sum"):
         """Write one USAGE row of per-cycle quantities from prims[i][key], plus a
-        SUM (or MAX, for demand) total, and record its row number in `urow` so the
+        SUM (or MAX, for solar DC) total, and record its row number in `urow` so the
         rate blocks can reference these cells."""
         nonlocal row
         ws.cell(row, 1, label).font = Font(FONT, size=10)
@@ -565,7 +566,7 @@ def build_dashboard(wb, prims, eref, meta):
             cc = ws.cell(row, c, prims[i][key]); cc.font = Font(FONT, color=BLUE, size=10)
             cc.number_format = KWH; cc.alignment = Alignment(horizontal="right")
         rng = f"{cl[0]}{row}:{cl[-1]}{row}"
-        # Demand totals as a MAX (kW doesn't sum across cycles); everything else sums.
+        # Solar DC is a fixed nameplate, shown as a MAX (it doesn't sum across cycles); everything else sums.
         t = ws.cell(row, tot_col, f"=SUM({rng})" if agg == "sum" else f"=MAX({rng})")
         t.font = Font(FONT, bold=True, size=10); t.number_format = KWH
         urow[key] = row; row += 1
@@ -573,7 +574,7 @@ def build_dashboard(wb, prims, eref, meta):
     usage("Days", "days"); usage("Net consumption (kWh)", "net")
     usage("  Super-off-peak 10p-6a (kWh)", "so"); usage("  Off-peak (195 basis) (kWh)", "off195")
     usage("  Off-peak (194 basis) (kWh)", "off194"); usage("  On-peak wkdy 3-7p (kWh)", "peak")
-    usage("Peak demand (kW)", "demand", "max")
+    usage("Solar DC (kW)", "solar_dc_kw", "max")
 
     ws.cell(row, 1, "BILLABLE AFTER CARRY-FORWARD BANKING (what each plan is billed on)").font = \
         Font(FONT, bold=True, color="0F6E56", size=11)
@@ -659,7 +660,7 @@ def build_dashboard(wb, prims, eref, meta):
 
         br = line("Basic Service", [f"={e(i,'basic_day')}*{u(i,'days')}" for i in range(ncyc)])
         cr = line("Customer Benefit Contribution",
-                  [f"={e(i,'cbc_rate')}*{u(i,'demand')}*{u(i,'days')}" for i in range(ncyc)])
+                  [f"={e(i,'cbc_rate')}*{u(i,'solar_dc_kw')}*{u(i,'days')}" for i in range(ncyc)])
         mr = line("Merchant Function Charge", [f"={e(i,'mfc_rate')}*{netb[i]}" for i in range(ncyc)])
         dr = line("Delivery (energy)", deliv)
         dsr = line("Delivery & System subtotal",
@@ -819,7 +820,7 @@ def simulate_banks(prims: "list[dict[str, Any]]", rate: str
         for k in periods:
             banks[k] += pending[k]
         rows.append(dict(start=p["start"], end_label=p.get("end_label", p["end"]),
-                         days=int(p["days"]), demand=float(p["demand"]), eff=p["eff"],
+                         days=int(p["days"]), solar_dc_kw=float(p["solar_dc_kw"]), eff=p["eff"],
                          periods=periods, net=net, billable=dict(billable),
                          deposit=dict(pending), withdraw=dict(withdraw),
                          transfers=transfers, bank_in=bank_in, bank_out=dict(banks)))
@@ -827,7 +828,7 @@ def simulate_banks(prims: "list[dict[str, Any]]", rate: str
 
 
 def bill_tou(rate: str, billable: "dict[str, float]", net_billed: float, days: int,
-             demand: float, e: "dict[str, Any]") -> float:
+             solar_dc_kw: float, e: "dict[str, Any]") -> float:
     """All-in charge for one cycle on Rate 194 or 195 from billable kWh per period.
     Mirrors the Dashboard line items (basic, CBC, MFC, delivery, supply, DER/DSA/RDA,
     NYSA/PILOTs/property tax, sales tax)."""
@@ -839,7 +840,7 @@ def bill_tou(rate: str, billable: "dict[str, float]", net_billed: float, days: i
     else:  # 194
         deliv = billable["off"] * e["d194_off"] + billable["peak"] * e["d194_peak"]
         supply = e["psc"] * (billable["off"] * e["m194_off"] + billable["peak"] * e["m194_peak"])
-    ds_sub = e["basic_day"] * days + e["cbc_rate"] * demand * days + e["mfc_rate"] * net_billed + deliv
+    ds_sub = e["basic_day"] * days + e["cbc_rate"] * solar_dc_kw * days + e["mfc_rate"] * net_billed + deliv
     der = e["der_rate"] * net_billed
     dsa = e["dsa_rate"] * net_billed
     rda = e["rda_rate"] * net_billed
@@ -869,7 +870,7 @@ def value_pool_optimum(prims: "list[dict[str, Any]]", rate: str) -> float:
             billable[k] -= cover; pool -= cover * weights[k]
         pool += sum(-net[k] * weights[k] for k in periods if net[k] < 0)
         total += bill_tou(rate, billable, sum(billable.values()), int(p["days"]),
-                          float(p["demand"]), p["eff"])
+                          float(p["solar_dc_kw"]), p["eff"])
     return total
 
 
@@ -889,7 +890,7 @@ def banked_total(prims: "list[dict[str, Any]]", rate: str) -> float:
     """Total all-in cost for `rate` across all cycles using carry-forward banking."""
     sim, _ = simulate_banks(prims, rate)
     return sum(bill_tou(rate, s["billable"], sum(s["billable"].values()),
-                        s["days"], s["demand"], s["eff"]) for s in sim)
+                        s["days"], s["solar_dc_kw"], s["eff"]) for s in sim)
 
 
 def attach_banked_quantities(prims: "list[dict[str, Any]]") -> None:
@@ -951,7 +952,7 @@ def write_banking_tab(wb: "Workbook", sim: "list[dict[str, Any]]",
     for s in sim:
         e = s["eff"]; b = s["billable"]
         net_billed = sum(b[k] for k in periods)
-        amt = bill_tou(rate, b, net_billed, s["days"], s["demand"], e)
+        amt = bill_tou(rate, b, net_billed, s["days"], s["solar_dc_kw"], e)
         total += amt
         xtext = "; ".join(f"{up[src]}\u2192{up[dst]}: {sk:.0f}"
                           for src, dst, sk, _g in s["transfers"]) or "\u2014"
@@ -1027,7 +1028,8 @@ def main():
                          "plus the last bill's Service To). N+1 dates -> N half-open cycles "
                          "[read_i, read_i+1). If omitted, the whole period is one cycle.")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--demand", type=float, default=None, help="Override peak demand (kW) for CBC")
+    ap.add_argument("--solar_dc_kw", type=float, default=None,
+                    help="Solar array DC nameplate (kW) \u2014 basis for the CBC charge (e.g. 16 for a 16.1 kW DC array)")
     cty = ap.add_mutually_exclusive_group()
     cty.add_argument("--suffolk", dest="county", action="store_const", const="suffolk",
                      help="Suffolk County tax treatment (default).")
@@ -1084,9 +1086,12 @@ def main():
     if read_dates:
         for p in prims:
             p["end_label"] = p["end"] + dt.timedelta(days=1)
-    if args.demand is not None:
+    if args.solar_dc_kw is not None:
         for p in prims:
-            p["demand"] = args.demand
+            p["solar_dc_kw"] = args.solar_dc_kw
+    else:
+        print("  WARNING: --solar_dc_kw not set; CBC will be billed as $0. "
+              "Pass your array's DC nameplate (e.g. --solar_dc_kw 16).")
     print(f"  {len(prims)} billing cycle(s).")
     for w in sorted(warnings):
         print(f"  WARNING: {w}")
