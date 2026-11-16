@@ -212,55 +212,73 @@ the two.
 
 The greedy simulation lets each period's banked credit offset its *own* period's
 usage (off-peak credit covers off-peak heating, etc.). There is a small, real gain
-available from instead steering off-peak credit into **super-off** during the
-winter PSC season. It is pure ratio arbitrage, not calendar timing.
+available from instead steering off-peak credit (and, at current rates, peak
+credit) into **super-off** during the winter PSC season. It is pure ratio
+arbitrage, not calendar timing.
 
 **Why it works.** Transfers are a fixed kWh swap — 1 off-peak credit always buys 2
 super-off kWh (and 1 peak buys 4). But the *true* dollar ratio between periods
 moves with the season:
 
-| credit → super-off | true price ratio | form pays | verdict |
-|---|---|---|---|
-| off-peak (summer) | ≈ 2.20 | 2 | form **underpays** — don't convert |
-| off-peak (winter) | ≈ 1.81 | 2 | form **overpays** — convert |
-| peak (summer) | ≈ 4.29 | 4 | form underpays — keep on peak |
-| peak (winter) | ≈ 4.04 | 4 | form underpays — keep on peak |
+| credit → super-off | true price ratio (monthly range) | form pays | break-even PSC | verdict |
+|---|---|---|---|---|
+| off-peak (summer) | ≈ 2.11 (2.08–2.15) | 2 | \$0.209 | form **underpays** — don't convert |
+| off-peak (winter) | ≈ 1.76 (1.76–1.77) | 2 | none — always below 2 | form **overpays** — convert |
+| peak (summer) | ≈ 4.06 (3.98–4.17) | 4 | \$0.148 | form slightly underpays — keep on peak |
+| peak (winter) | ≈ 3.86 (3.82–3.92) | 4 | \$0.102 | form **overpays** — convert |
 
-In the winter PSC season the off-peak rate falls (~\$0.22) while super-off stays
-near \$0.12, so the true off/SO ratio drops to ~1.81 — below the flat 2 the form
-pays. Converting one off-peak credit then yields 2 × \$0.122 ≈ \$0.245 of super-off
-offset versus the ~\$0.22 it would save on off-peak heating: a ~\$0.025/kWh edge.
-Across the banked off-peak surplus this is worth roughly **\$50–55/yr** on the
-reference profile (~1.5% of the bill). The peak rows never cross 4, so peak credit
-is always worth more left on peak — **never convert peak to super-off**.
+Ratios are all-in marginal \$/kWh as the tool bills them (delivery + PSC × period
+multiplier + MFC, riders, DER/DSA/RDA, sales tax) on the tariff cached as of
+November 2026. Summer uses the Jun–Sep 2026 average PSC (\$0.135); winter uses the
+latest eight winter months, Dec 2025–May 2026 and Oct–Nov 2026 (\$0.147); the
+range in parentheses is month by month. Delivery rates are fixed within a season,
+so the ratios move only with the monthly PSC, and a higher PSC pulls every ratio
+down. The **break-even PSC** is the monthly PSC above which a ratio drops below the
+form's, so converting pays.
+
+In the winter season off-peak delivery drops from \$0.139 to \$0.093/kWh while
+super-off stays at \$0.045, so at the winter-average PSC off-peak costs about
+\$0.265/kWh all-in against \$0.150 for super-off — a true off/SO ratio of ~1.76,
+below the flat 2 the form pays (at any PSC). Converting one off-peak credit then
+yields 2 × \$0.150 ≈ \$0.300 of super-off offset versus the ~\$0.265 it would save on
+off-peak heating: a ~\$0.036/kWh edge. On the ~2,500 kWh of off-peak surplus banked
+May–Oct 2026, that is worth roughly **\$90/yr**.
+
+Winter peak converts too. At the winter-average PSC the peak/SO ratio is ~3.86, so
+a converted peak credit yields 4 × \$0.150 ≈ \$0.600 of super-off offset versus the
+~\$0.580 it would save on winter peak usage — a ~\$0.02/kWh edge (about \$12/yr on
+2026's ~600 kWh peak surplus). That holds whenever the PSC is above ~\$0.10, which
+every cached winter month has been. Summer peak sits just above 4 (~4.06), so keep
+summer peak credit on peak; the margin is thin, and a month with PSC above
+~\$0.148 (June 2026 was \$0.152) tips it the other way.
 
 **The routine.**
 
-1. **Hoard through the summer PSC season (≈ Jun–Sep).** File no off→super-off
-   transfers; let net export bank in the off-peak (and peak) buckets. The off/SO
-   ratio is above 2 then, so converting would lose value, and summer super-off is
-   the cheapest of the year.
+1. **Hoard through the summer PSC season (≈ Jun–Sep).** File no transfers into
+   super-off; let net export bank in the off-peak and peak buckets. Both ratios are
+   above the form's then (~2.11 and ~4.06), so converting would lose value.
 2. **Convert once the winter PSC season starts (≈ October).** File an Excess
-   Generation Exchange transfer to move the banked off-peak surplus into super-off,
-   where the fixed 1:2 ratio now overpays. The credit you transfer is the *summer
-   surplus that is actually sitting in the bank* — no need to make anything survive
-   to late winter.
-3. **Resume hoarding when summer returns.** Stop converting once the off/SO ratio
-   climbs back above 2.
+   Generation Exchange request moving the banked off-peak surplus into super-off
+   (1:2) and the banked peak surplus into super-off (1:4); both fixed ratios now
+   overpay, and the two moves fit in one request's two transfer statements. The
+   credit you transfer is the *summer surplus that is actually sitting in the
+   bank* — no need to make anything survive to late winter.
+3. **Resume hoarding when summer returns.** Stop converting once the ratios climb
+   back above the form's.
 
 **Two honest caveats.**
 
 - *Timing within the conversion window doesn't add value.* Because the reachable
-  super-off rate is essentially flat (~\$0.12 from summer through December — the
-  off-peak bank is emptied by heating load before the high-rate February cycles),
-  converting in summer versus the first winter month lands on the same rate. The
+  super-off rate is roughly flat (~\$0.13–0.15 all-in from summer through January —
+  the off-peak bank is emptied by heating load before the high-rate February cycles),
+  converting in summer versus the first winter month lands on about the same rate. The
   gain comes entirely from the **destination choice** (super-off instead of
   off-peak heating) during the winter ratio window, not from *when* you file. There
   is no extra prize from trying to reach the high-PSC late-winter super-off cycles —
   no banked credit survives to them.
 - *It is profile- and effort-dependent.* The edge requires a summer off-peak
   surplus to convert; a net off-peak consumer has nothing to steer. And it means
-  filing transfers every winter for a few tens of dollars, so the default banking
+  filing transfers every winter for on the order of \$100 a year, so the default banking
   is a perfectly reasonable do-nothing baseline. There is no downside to the
   hoarding itself — residential credits roll forward 20 years.
 
