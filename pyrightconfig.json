@@ -1,4 +1,6 @@
 {
+  "venvPath": ".",
+  "venv": ".venv",
   "typeCheckingMode": "strict",
   "reportUnknownMemberType": "none",
   "reportUnknownArgumentType": "none",
