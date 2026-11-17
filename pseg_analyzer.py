@@ -788,7 +788,7 @@ def _cover_deficits(banks: "dict[str, float]", billable: "dict[str, float]",
     return transfers
 
 
-def simulate_banks(prims: "list[dict[str, Any]]", rate: str
+def simulate_banks(prims: "list[dict[str, Any]]", rate: str, convert_all_to_so: bool = False
                    ) -> "tuple[list[dict[str, Any]], dict[str, float]]":
     """Sequential per-period kWh credit banks with carry-forward and the greedy transfer
     step, for Rate 194 (two banks) or 195 (three banks).
@@ -802,6 +802,7 @@ def simulate_banks(prims: "list[dict[str, Any]]", rate: str
     periods = TOD_PERIODS[rate]
     weights = TOD_WEIGHTS[rate]
     nk = TOD_NETKEY[rate]
+    so_key = min(weights, key=lambda k: weights[k])  # lowest-value bank: 'so' (195) / 'off' (194)
     banks: "dict[str, float]" = {k: 0.0 for k in periods}
     rows: "list[dict[str, Any]]" = []
     for p in prims:
@@ -810,13 +811,24 @@ def simulate_banks(prims: "list[dict[str, Any]]", rate: str
         billable: "dict[str, float]" = {}
         withdraw: "dict[str, float]" = {}
         pending: "dict[str, float]" = {}
+        transfers: "list[tuple[str, str, float, float]]" = []
+        if convert_all_to_so:
+            # Alan's filed policy: each cycle, move every other bank's entire carried-in
+            # balance into the super-off bank at the form's ratios (<=2 moves = the cap).
+            # Replaces the greedy; peak/off deficits then bill in cash, super-off absorbs all.
+            for k in periods:
+                if k != so_key and banks[k] > 1e-9:
+                    src_kwh = banks[k]; dst_kwh = src_kwh * (weights[k] / weights[so_key])
+                    banks[so_key] += dst_kwh; banks[k] = 0.0
+                    transfers.append((k, so_key, src_kwh, dst_kwh))
         for k in periods:
             if net[k] >= 0:
                 w = min(net[k], banks[k]); banks[k] -= w
                 withdraw[k] = w; billable[k] = net[k] - w; pending[k] = 0.0
             else:
                 withdraw[k] = 0.0; billable[k] = 0.0; pending[k] = -net[k]
-        transfers = _cover_deficits(banks, billable, weights, MAX_TRANSFERS_PER_CYCLE)
+        if not convert_all_to_so:
+            transfers = _cover_deficits(banks, billable, weights, MAX_TRANSFERS_PER_CYCLE)
         for k in periods:
             banks[k] += pending[k]
         rows.append(dict(start=p["start"], end_label=p.get("end_label", p["end"]),
@@ -886,14 +898,14 @@ def profile_summary(prims: "list[dict[str, Any]]", rate: str) -> "dict[str, Any]
     return dict(annual=annual, value_net=value_net, net_producer=value_net < 0)
 
 
-def banked_total(prims: "list[dict[str, Any]]", rate: str) -> float:
+def banked_total(prims: "list[dict[str, Any]]", rate: str, convert_all_to_so: bool = False) -> float:
     """Total all-in cost for `rate` across all cycles using carry-forward banking."""
-    sim, _ = simulate_banks(prims, rate)
+    sim, _ = simulate_banks(prims, rate, convert_all_to_so)
     return sum(bill_tou(rate, s["billable"], sum(s["billable"].values()),
                         s["days"], s["solar_dc_kw"], s["eff"]) for s in sim)
 
 
-def attach_banked_quantities(prims: "list[dict[str, Any]]") -> None:
+def attach_banked_quantities(prims: "list[dict[str, Any]]", convert_all_to_so: bool = False) -> None:
     """Annotate each cycle with the kWh it is actually billed on after carry-forward
     banking, so the Dashboard compares every plan on the same realistic basis:
       b_flat                 - net after a single volumetric bank (Rates 580/180);
@@ -910,7 +922,7 @@ def attach_banked_quantities(prims: "list[dict[str, Any]]") -> None:
         else:
             p["b_flat"] = 0.0; bank += -net
     for rate, pref in (("194", "b194"), ("195", "b195")):
-        sim, _ = simulate_banks(prims, rate)
+        sim, _ = simulate_banks(prims, rate, convert_all_to_so)
         for p, s in zip(prims, sim):
             for k in TOD_PERIODS[rate]:
                 p[f"{pref}_{k}"] = float(s["billable"][k])
@@ -1030,6 +1042,10 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--solar_dc_kw", type=float, default=None,
                     help="Solar array DC nameplate (kW) \u2014 basis for the CBC charge (e.g. 16 for a 16.1 kW DC array)")
+    ap.add_argument("--convert-all-to-so", dest="convert_all_to_so", action="store_true",
+                    help="Model EG transfers as moving ALL peak and off-peak credits into super-off "
+                         "every cycle (the filed monthly policy), instead of the default greedy "
+                         "cover-the-deficit transfers; matches actual bank balances when run continuously")
     cty = ap.add_mutually_exclusive_group()
     cty.add_argument("--suffolk", dest="county", action="store_const", const="suffolk",
                      help="Suffolk County tax treatment (default).")
@@ -1096,7 +1112,7 @@ def main():
     for w in sorted(warnings):
         print(f"  WARNING: {w}")
 
-    attach_banked_quantities(prims)
+    attach_banked_quantities(prims, args.convert_all_to_so)
     wb = Workbook()
     write_rates_tab(wb, sched)
     eref = write_effective_tab(wb, prims)
@@ -1106,13 +1122,14 @@ def main():
 
     # Always write the banking detail for both Time-of-Day rates: the Dashboard
     # already bills them on this bank logic, so the audit trail is never optional.
-    t194, t195 = banked_total(prims, "194"), banked_total(prims, "195")
+    t194 = banked_total(prims, "194", args.convert_all_to_so)
+    t195 = banked_total(prims, "195", args.convert_all_to_so)
     best = "194" if t194 < t195 else "195"
     print(f"\n  Time-of-Day banking: 194 ${t194:,.2f} vs 195 ${t195:,.2f}  "
           f"->  Rate {best} is the cheaper TOD plan.")
     for rate in ("194", "195"):
         periods = TOD_PERIODS[rate]
-        sim, leftover = simulate_banks(prims, rate)
+        sim, leftover = simulate_banks(prims, rate, args.convert_all_to_so)
         optimum = value_pool_optimum(prims, rate)
         profile = profile_summary(prims, rate)
         bk_total = write_banking_tab(wb, sim, leftover, optimum, profile, rate)

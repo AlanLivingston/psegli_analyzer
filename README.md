@@ -35,13 +35,14 @@ python pseg_analyzer.py --cons_file Usage.csv
 This analyzes the entire data period as a single billing cycle and writes
 `Usage_analysis.xlsx` in the current folder.
 
-To break the data into your actual billing cycles and match the demand figure on
-your bill, pass the meter-read dates from your bills:
+To break the data into your actual billing cycles, pass the meter-read dates from
+your bills, plus your solar array's DC nameplate so the Customer Benefit
+Contribution is billed correctly:
 
 ```bash
 python pseg_analyzer.py --cons_file Usage.csv \
     --read-dates 2025-11-15 2025-12-15 2026-01-16 2026-02-13 2026-03-16 2026-04-16 2026-05-15 \
-    --demand 16
+    --solar_dc_kw 16
 ```
 
 ---
@@ -51,9 +52,10 @@ python pseg_analyzer.py --cons_file Usage.csv \
 | Option | Required | Description |
 |---|---|---|
 | `--cons_file <file.csv>` | Yes | The consumption CSV exported from PSEG LI. |
-| `--read-dates <date> [<date> ...]` | No | Meter-read boundary dates in `YYYY-MM-DD` form. Pass each bill's **Service From** date plus the last bill's **Service To** date. See "Matching bills with `--read-dates`" below. If omitted, the whole period is analyzed as one cycle. |
+| `--read-dates <date> [<date> ...]` | No | Meter-read boundary dates in `YYYY-MM-DD` form. Pass each bill's **Service From** date plus the last bill's **Service To** date. See "Defining billing cycles with `--read-dates`" below. If omitted, the whole period is analyzed as one cycle. |
 | `--out <file.xlsx>` | No | Output filename. Defaults to `<cons_file>_analysis.xlsx`. |
-| `--demand <kW>` | No | Override the peak demand used for the Customer Benefit Contribution. PSEG bills the CBC on a fixed kW (commonly the solar interconnection size), so set this to the kW shown on your bill — typically `16`. If omitted, the tool estimates demand from the data. |
+| `--solar_dc_kw <kW>` | No, but pass it | Solar array DC nameplate in kW, the basis for the Customer Benefit Contribution (e.g. `16` for a 16.1 kW DC array). The CBC is a fixed charge on array size, not usage. If omitted, the CBC is billed as \$0 and a warning is printed. |
+| `--convert-all-to-so` | No | Model Excess Generation Exchange transfers as moving **all** peak and off-peak credit into super-off every cycle, instead of the default greedy cover-the-deficit transfers. Run continuously from the first Rate 195 read date, it tracks the real bank balances. See "Transfer strategy" below. |
 | `--suffolk` / `--nassau` / `--rockaways` | No | Service-area tax treatment (mutually exclusive). Selects the local sales-tax rate on residential electricity. **`--suffolk` is the default.** See "Service area" below. |
 | `--sales-tax <frac>` | No | Override the local sales-tax fraction directly (e.g. `0.03`), regardless of county — useful for the Nassau school-district exceptions. |
 | `--refresh` | No | Force a re-scrape of any month whose rates are still flagged as estimated (requires internet). |
@@ -99,7 +101,7 @@ Jan 16→Feb 13, Feb 13→Mar 16, Mar 16→Apr 16, Apr 16→May 15:
 ```bash
 python pseg_analyzer.py --cons_file Usage.csv \
     --read-dates 2025-11-15 2025-12-15 2026-01-16 2026-02-13 2026-03-16 2026-04-16 2026-05-15 \
-    --demand 16
+    --solar_dc_kw 16
 ```
 
 produces six cycles — `[Nov 15, Dec 15)`, `[Dec 15, Jan 16)`, … — labeled with
@@ -195,10 +197,10 @@ charge. It also includes an **optimality check** with two reference points:
   cycle cap) and is typically under a dollar a year, because the exchange ratios
   are value-neutral.
 
-There is a separate, real (if small) gain available from *choosing the transfer
-destination* by season rather than rebalancing — see "Transfer-ratio arbitrage"
-below — but it is a deliberate manual strategy, not something the greedy
-simulation scores.
+The greedy step models filing transfers only to cover deficits. The policy
+actually filed here, moving all peak and off-peak credit into super-off every
+cycle, is modeled by `--convert-all-to-so` instead; see "Transfer strategy" below
+for why it is the right policy for an overnight-heavy household.
 
 A **usage-profile** block reports each period's annual net (consumer vs producer)
 and flags forfeiture exposure: a household that is a net *producer* in value
@@ -208,24 +210,42 @@ through ordinary use and nothing is exposed. For each TOD rate the console print
 the banked total, the optimality gap, and the profile, and names the cheaper of
 the two.
 
-### Transfer-ratio arbitrage (hoard-and-convert)
+### Transfer strategy: convert everything to super-off, every cycle
 
-The greedy simulation lets each period's banked credit offset its *own* period's
-usage (off-peak credit covers off-peak heating, etc.). There is a small, real gain
-available from instead steering off-peak credit (and, at current rates, peak
-credit) into **super-off** during the winter PSC season. It is pure ratio
-arbitrage, not calendar timing.
+For a household whose super-off period is a permanent deficit (overnight EV
+charging), the best Excess Generation Exchange policy is a fixed routine:
 
-**Why it works.** Transfers are a fixed kWh swap — 1 off-peak credit always buys 2
-super-off kWh (and 1 peak buys 4). But the *true* dollar ratio between periods
-moves with the season:
+> **Every cycle, transfer the whole peak bank and the whole off-peak bank into
+> super-off. Never transfer into off-peak or peak. Don't time it.**
 
-| credit → super-off | true price ratio (monthly range) | form pays | break-even PSC | verdict |
+That is one request with two statements (peak → super-off at 1:4, off-peak →
+super-off at 1:2), which is the form's per-request cap. Pass `--convert-all-to-so`
+to model it. Each cycle the simulation moves the carried-in peak and off-peak
+balances into super-off before billing; peak and off-peak deficits then bill in
+cash, and super-off absorbs all the credit. This replaces the greedy rebalancing
+described above.
+
+**Why it pays.** A steady-state simulation on a year of this household's interval
+data put the policy at about **\$432/yr** in energy charges versus filing nothing
+(each bank offsetting only its own period):
+
+- **~\$315 is the structural peak surplus.** The array exports about 491 kWh/yr more
+  on peak than the house uses on peak. Credit left in the peak bank never meets peak
+  load and piles up toward the 20-year forfeiture. Super-off is the one bucket that
+  always has load to absorb it.
+- **~\$117 is the off-peak conversion.** In the winter season the form's 1:2 is worth
+  more than spending the credit on off-peak usage (below).
+
+**What the price ratios say.** A transfer is a fixed kWh swap: 1 off-peak credit
+always buys 2 super-off kWh, and 1 peak buys 4. The *true* dollar ratio between
+periods moves with the season:
+
+| credit → super-off | true price ratio (monthly range) | form pays | break-even PSC | form vs. own-period use |
 |---|---|---|---|---|
-| off-peak (summer) | ≈ 2.11 (2.08–2.15) | 2 | \$0.209 | form **underpays** — don't convert |
-| off-peak (winter) | ≈ 1.76 (1.76–1.77) | 2 | none — always below 2 | form **overpays** — convert |
-| peak (summer) | ≈ 4.06 (3.98–4.17) | 4 | \$0.148 | form slightly underpays — keep on peak |
-| peak (winter) | ≈ 3.86 (3.82–3.92) | 4 | \$0.102 | form **overpays** — convert |
+| off-peak (summer) | ≈ 2.11 (2.08–2.15) | 2 | \$0.209 | underpays ~5% |
+| off-peak (winter) | ≈ 1.76 (1.76–1.77) | 2 | none — always below 2 | **overpays ~13%** |
+| peak (summer) | ≈ 4.06 (3.98–4.17) | 4 | \$0.148 | underpays ~1.5% |
+| peak (winter) | ≈ 3.86 (3.82–3.92) | 4 | \$0.102 | **overpays ~4%** |
 
 Ratios are all-in marginal \$/kWh as the tool bills them (delivery + PSC × period
 multiplier + MFC, riders, DER/DSA/RDA, sales tax) on the tariff cached as of
@@ -234,58 +254,57 @@ latest eight winter months, Dec 2025–May 2026 and Oct–Nov 2026 (\$0.147); th
 range in parentheses is month by month. Delivery rates are fixed within a season,
 so the ratios move only with the monthly PSC, and a higher PSC pulls every ratio
 down. The **break-even PSC** is the monthly PSC above which a ratio drops below the
-form's, so converting pays.
+form's, so the form overpays.
 
-In the winter season off-peak delivery drops from \$0.139 to \$0.093/kWh while
-super-off stays at \$0.045, so at the winter-average PSC off-peak costs about
-\$0.265/kWh all-in against \$0.150 for super-off — a true off/SO ratio of ~1.76,
-below the flat 2 the form pays (at any PSC). Converting one off-peak credit then
-yields 2 × \$0.150 ≈ \$0.300 of super-off offset versus the ~\$0.265 it would save on
-off-peak heating: a ~\$0.036/kWh edge. On the ~2,500 kWh of off-peak surplus banked
-May–Oct 2026, that is worth roughly **\$90/yr**.
+The table compares converting a credit with spending it on its *own* period's usage
+in the same season. In winter the form overpays for both, so converting wins
+outright. At the winter-average PSC one off-peak credit buys 2 × \$0.150 ≈ \$0.300
+of super-off usage against the ~\$0.265 it would save on off-peak, and one peak
+credit buys 4 × \$0.150 ≈ \$0.600 against ~\$0.580 on winter peak.
 
-Winter peak converts too. At the winter-average PSC the peak/SO ratio is ~3.86, so
-a converted peak credit yields 4 × \$0.150 ≈ \$0.600 of super-off offset versus the
-~\$0.580 it would save on winter peak usage — a ~\$0.02/kWh edge (about \$12/yr on
-2026's ~600 kWh peak surplus). That holds whenever the PSC is above ~\$0.10, which
-every cached winter month has been. Summer peak sits just above 4 (~4.06), so keep
-summer peak credit on peak; the margin is thin, and a month with PSC above
-~\$0.148 (June 2026 was \$0.152) tips it the other way.
+In summer the form underpays slightly, which looks like an argument for holding
+credit until October. It isn't, because this profile has no summer peak or off-peak
+usage for a held credit to offset: both periods are net exports all summer. A held
+off-peak credit just waits for the winter off-peak deficits (roughly Nov–Feb), where
+converting beats it, and much of the peak credit never meets peak load at all. The
+summer rows never come into play, so credit should go to super-off as soon as it
+lands in the bank.
 
-**The routine.**
+**Why not time or reserve credits.**
 
-1. **Hoard through the summer PSC season (≈ Jun–Sep).** File no transfers into
-   super-off; let net export bank in the off-peak and peak buckets. Both ratios are
-   above the form's then (~2.11 and ~4.06), so converting would lose value.
-2. **Convert once the winter PSC season starts (≈ October).** File an Excess
-   Generation Exchange request moving the banked off-peak surplus into super-off
-   (1:2) and the banked peak surplus into super-off (1:4); both fixed ratios now
-   overpay, and the two moves fit in one request's two transfer statements. The
-   credit you transfer is the *summer surplus that is actually sitting in the
-   bank* — no need to make anything survive to late winter.
-3. **Resume hoarding when summer returns.** Stop converting once the ratios climb
-   back above the form's.
+- *Seasonal timing is a rounding error.* Hoarding through the summer and converting
+  in October beats converting every cycle by only ~\$6/yr, and at a 4% opportunity
+  cost it loses ~\$4, because holding credit defers the savings. Super-off's all-in
+  rate is nearly flat (~\$0.13–0.16 across the year), so it hardly matters which
+  cycle a converted credit is spent in.
+- *Reserving credit doesn't add savings.* Each bank applies automatically to its own
+  period's usage, so the only way to hold super-off credit back is to park it in
+  another bank and move it back later. A November 2026 winter projection put that
+  between −\$3 and +\$5 over the winter, against a ~\$21 ceiling for perfect timing.
+  The super-off bank ran dry in the December cycle under every strategy; stretching
+  the zero-dollar bills just moves about the same dollars to different months.
+- *Shift usage, not credit.* Once the banks are empty in mid-winter, every kWh moved
+  into 10 PM–6 AM saves about \$0.11 coming from off-peak and about \$0.43 coming from
+  weekday 3–7 PM.
 
-**Two honest caveats.**
+**When the rule doesn't apply.** It depends on super-off being a permanent deficit,
+so every converted credit finds load within a cycle or two. A household that exports
+overnight, or has little overnight load, would strand credit in super-off; the
+default greedy rebalancing is the better model there. The figures above also assume
+the 2026 tariff: a change in the summer/winter delivery split or the PSC multipliers
+moves the table.
 
-- *Timing within the conversion window doesn't add value.* Because the reachable
-  super-off rate is roughly flat (~\$0.13–0.15 all-in from summer through January —
-  the off-peak bank is emptied by heating load before the high-rate February cycles),
-  converting in summer versus the first winter month lands on about the same rate. The
-  gain comes entirely from the **destination choice** (super-off instead of
-  off-peak heating) during the winter ratio window, not from *when* you file. There
-  is no extra prize from trying to reach the high-PSC late-winter super-off cycles —
-  no banked credit survives to them.
-- *It is profile- and effort-dependent.* The edge requires a summer off-peak
-  surplus to convert; a net off-peak consumer has nothing to steer. And it means
-  filing transfers every winter for on the order of \$100 a year, so the default banking
-  is a perfectly reasonable do-nothing baseline. There is no downside to the
-  hoarding itself — residential credits roll forward 20 years.
+**Running it.** Run the analyzer continuously from the first Rate 195 read date
+through the latest one. The simulation starts every bank at zero on the first read
+date, so a run that starts mid-year opens with empty banks, understates the credit,
+and won't track the Energy Credit Bank section of the bill.
 
-The simulation is most meaningful over a **full year** of read dates, because the
-carry-forward is the whole point: a high-solar summer builds the banks the winter
-conversion works on. With only winter read dates the banks start empty in November
-and the picture is understated.
+Under `--convert-all-to-so` the Banking195 optimality gap no longer measures transfer
+friction. The value-neutral optimum spends pooled credit on the window's peak and
+off-peak deficits, while convert-all bills those in cash and carries the super-off
+balance into the next cycle. Read the gap next to the closing super-off balance: in
+the November 2026 run a \$78 gap sat beside 1,037 kWh of super-off credit carried
+into December, so most of the gap is credit not yet spent, not money lost.
 
 ---
 
@@ -297,7 +316,8 @@ The workbook contains three tabs.
 The main view. For each billing cycle, plus a **TOTAL** column:
 
 - **Usage** — days, net consumption, the time-of-use buckets (super-off-peak
-  10 p.m.–6 a.m., off-peak, on-peak weekday 3–7 p.m.), and peak demand.
+  10 p.m.–6 a.m., off-peak, on-peak weekday 3–7 p.m.), and the solar DC size
+  (kW) the CBC is billed on.
 - **Billable after carry-forward banking** — the kWh each plan is actually billed
   on once net-export credits are banked and carried forward (a single volumetric
   bank for 580/180, the per-period banks for 194/195). Every per-rate bill below
@@ -386,8 +406,10 @@ much to trust those numbers.
   a small amount due to the cycle-boundary convention above and because a few
   riders (PILOTs, property tax, NYSA) are modeled as steady percentages rather
   than their exact monthly values.
-- **Demand for the CBC.** Pass `--demand` to match the kW on your bill; otherwise
-  the CBC line is based on the metered peak, which is usually higher.
+- **Solar size for the CBC.** Pass `--solar_dc_kw` with the array's DC nameplate.
+  The CBC is a fixed charge on that size; credits never offset it. Without the flag
+  the CBC is billed as \$0, so the estimate runs low by about \$19 a month for a
+  16 kW array.
 - **Service area.** Use `--suffolk` / `--nassau` / `--rockaways` to set the local
   sales tax (or `--sales-tax` to override). The supply/delivery schedules and the
   PILOT/property-tax recovery are LIPA-wide and do not vary by county; only the
@@ -406,7 +428,7 @@ much to trust those numbers.
 ```bash
 $ python pseg_analyzer.py --cons_file Usage.csv \
       --read-dates 2025-11-15 2025-12-15 2026-01-16 2026-02-13 2026-03-16 2026-04-16 2026-05-15 \
-      --demand 16
+      --solar_dc_kw 16
 
 Loading consumption data...
   35,036 intervals, 2025-05-30 to 2026-05-29
